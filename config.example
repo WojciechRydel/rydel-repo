@@ -1,0 +1,8 @@
+# rydel-tools configuration (host-specific).
+#
+# Copy to ~/.config/rydel-tools/config (or $XDG_CONFIG_HOME/rydel-tools/config)
+# and fill in the paths for this host. The := form only assigns when the
+# variable is unset, so environment variables of the same name take precedence.
+
+: "${KEEPASSXC_DB:=/path/to/passwords.kdbx}"
+: "${KEEPASSXC_TPM_CRED:=/path/to/passwords.kdbx.tpm.cred}"

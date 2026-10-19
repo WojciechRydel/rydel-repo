@@ -10,8 +10,9 @@ get_count() {
 }
 
 # Get all entries and sort by usage weight
-secret=$(find ~/.password-store -name '*.gpg' | \
-  awk -v root=$HOME/.password-store/ '{ sub(root, ""); sub(/\.gpg$/, ""); print }' | \
+store="${PASSWORD_STORE_DIR:-$HOME/.password-store}"
+secret=$(find "$store" -name '*.gpg' | \
+  awk -v root="$store/" '{ sub(root, ""); sub(/\.gpg$/, ""); print }' | \
   while read -r entry; do
     count=$(get_count "$entry")
     [ -z "$count" ] && count=0

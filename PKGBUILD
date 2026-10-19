@@ -1,10 +1,8 @@
-# Maintainer: Wojciech Rydel <wojciech@rydel.xyz>
 pkgname=rydel-tools
 pkgver=1.0.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Personal Wayland typing helpers: type-text, pass-type, and KeePassXC pickers"
 arch=('any')
-url="https://github.com/WojciechRydel/rydel-repo"
 license=('MIT')
 depends=(
   'bash'

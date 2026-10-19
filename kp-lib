@@ -7,21 +7,22 @@
 # that is oo7's job and the vault no longer serves the bus - so these talk to
 # keepassxc-cli directly.
 
-# The Syncthing folder root differs per host - ~/sync on hpc, ~/shared/sync
-# on t14 - so probe rather than hardcode. Same divergence that makes
-# .stignore a two-place edit and that put t14's task backup in the wrong
-# directory once already.
-if [ -n "${KEEPASSXC_DB:-}" ]; then
-    KP_DB="$KEEPASSXC_DB"
-else
-    for _c in "$HOME/sync/keepassxc/passwords.kdbx" \
-              "$HOME/shared/sync/keepassxc/passwords.kdbx"; do
-        [ -r "$_c" ] && { KP_DB="$_c"; break; }
-    done
-    KP_DB="${KP_DB:-$HOME/sync/keepassxc/passwords.kdbx}"
-    unset _c
-fi
-KP_CRED="${KEEPASSXC_TPM_CRED:-$HOME/.config/keepassxc/passwords.kdbx.tpm.cred}"
+# Host-specific paths are not hardcoded here: they come from the environment
+# or ~/.config/rydel-tools/config, so the package itself stays generic.
+_rt_config="${XDG_CONFIG_HOME:-$HOME/.config}/rydel-tools/config"
+[ -r "$_rt_config" ] && . "$_rt_config"
+
+KP_DB="${KEEPASSXC_DB:-}"
+[ -n "$KP_DB" ] || {
+    echo "kp-lib: KEEPASSXC_DB is not set (set it in $_rt_config or the environment)" >&2
+    exit 1
+}
+
+KP_CRED="${KEEPASSXC_TPM_CRED:-}"
+[ -n "$KP_CRED" ] || {
+    echo "kp-lib: KEEPASSXC_TPM_CRED is not set (set it in $_rt_config or the environment)" >&2
+    exit 1
+}
 KP_CACHE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kp-entries"
 # Resolved from this file's own location rather than $0, which is the *caller*
 # - a shell when the library is sourced interactively, in which case the

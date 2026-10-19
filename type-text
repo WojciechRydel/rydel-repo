@@ -21,9 +21,9 @@
 # client - XWayland, SDL/FreeRDP, games, VMs - sees an ordinary keyboard.
 #
 # The catch: ydotool maps characters to keycodes assuming US QWERTY, and it
-# cannot emit anything outside ASCII at all. The layout here (xkb_layout
-# voytech, which is a copy of pl) is plain US QWERTY across the whole ASCII
-# range, so passwords are safe; non-ASCII text still has to go via wtype.
+# cannot emit anything outside ASCII at all. The layout here is plain US
+# QWERTY across the whole ASCII range, so passwords are safe; non-ASCII text
+# still has to go via wtype.
 #
 # ydotool needs ydotoold running (user unit ydotool.service, NOT
 # ydotoold.service) and the logind ACL on /dev/uinput, which is scoped to the

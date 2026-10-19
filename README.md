@@ -39,6 +39,21 @@ systemctl --user enable --now ydotool.service
 The `ydotool.service` user unit ships with the `ydotool` package; this package
 only provides the retry drop-in, so enable the unit yourself once per user.
 
+## Configuration
+
+The scripts carry no machine-specific values. KeePassXC paths are read from
+the environment or `~/.config/rydel-tools/config`; a template is provided in
+[`config.example`](config.example):
+
+```sh
+mkdir -p ~/.config/rydel-tools
+cp config.example ~/.config/rydel-tools/config
+$EDITOR ~/.config/rydel-tools/config
+```
+
+`pass-type` honors the standard `PASSWORD_STORE_DIR` (default
+`~/.password-store`).
+
 ## Building
 
 ```sh
