@@ -1,0 +1,55 @@
+name: publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build package and repo db (Arch container)
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e HOST_UID="$(id -u)" \
+            -e HOST_GID="$(id -g)" \
+            -v "$PWD:/src" -w /src \
+            archlinux:base-devel bash -c '
+              set -euo pipefail
+              useradd -m builder
+              chown -R builder:builder /src
+              su builder -c "makepkg -f --nodeps"
+              repo-add rydel.db.tar.gz rydel-tools-*.pkg.tar.zst
+              # Dereference repo-add symlinks: GitHub Pages serves regular
+              # files only, so rydel.db must be a real gzip, not a symlink.
+              rm -f rydel.db rydel.files
+              cp rydel.db.tar.gz rydel.db
+              cp rydel.files.tar.gz rydel.files
+              chown -R "$HOST_UID:$HOST_GID" /src
+            '
+
+      - name: Publish to gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pages
+          cp rydel.db rydel.db.tar.gz rydel.files rydel.files.tar.gz \
+             rydel-tools-*.pkg.tar.zst /tmp/pages/
+          cd /tmp/pages
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b gh-pages
+          git add .
+          git commit -q -m "publish $(date -u +%FT%TZ)"
+          git push -f \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            gh-pages

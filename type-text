@@ -1,0 +1,73 @@
+#!/bin/bash
+# type-text - type the text on stdin as keystrokes into the focused window.
+#
+# ydotool first, wtype only as a fallback. That is the reverse of what kp-type
+# and pass-type used to do, and the reason is that wtype is unusable against
+# any client that resolves keys positionally.
+#
+# wtype uploads a one-off keymap over zwp_virtual_keyboard_v1, parking every
+# keysym it needs on a fresh keycode at level 1 - so it never presses Shift.
+# Wayland-native toolkits read the keysym straight out of that keymap and are
+# fine (verified here in kitty, GTK/zenity, Firefox and Chrome). Anything that
+# instead maps the raw keycode through the *seat's* layout gets a completely
+# different key, because wtype's keycodes start at evdev 1: typing "AbCz" into
+# an XWayland xterm on this box produced "^[123" - Escape, 1, 2, 3. Clients
+# that do read the keysym but then re-apply the (empty) modifier state end up
+# lowercasing everything instead. Neither symptom is a race: wtype -s 150 is
+# just as broken. Tested on sway 1.12 / wtype 0.4 / xorg-xwayland 24.1.
+#
+# ydotool has no such problem. It writes to /dev/uinput, so sway runs the
+# events through the real xkb layout and presses a real Shift, and every
+# client - XWayland, SDL/FreeRDP, games, VMs - sees an ordinary keyboard.
+#
+# The catch: ydotool maps characters to keycodes assuming US QWERTY, and it
+# cannot emit anything outside ASCII at all. The layout here (xkb_layout
+# voytech, which is a copy of pl) is plain US QWERTY across the whole ASCII
+# range, so passwords are safe; non-ASCII text still has to go via wtype.
+#
+# ydotool needs ydotoold running (user unit ydotool.service, NOT
+# ydotoold.service) and the logind ACL on /dev/uinput, which is scoped to the
+# active session - hence the socket check rather than blind trust.
+set -uo pipefail
+
+delay="${TYPE_TEXT_DELAY:-12}"
+socket="${YDOTOOL_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/.ydotool_socket}"
+
+text="$(cat)"
+[ -z "$text" ] && exit 0
+
+# Can ydotool express this text at all? Delete tab, newline and printable
+# ASCII; whatever survives is either non-ASCII or a control character, and
+# ydotool has no keycode for it. Octal ranges via tr rather than a grep
+# bracket range, because "[^ -~]" is read as a three-character set (space,
+# hyphen, tilde) by some grep/locale combinations and then matches everything.
+leftover="$(printf '%s' "$text" | LC_ALL=C tr -d '\11\12\40-\176')"
+
+# Text always travels on stdin, never argv: argv is readable via /proc.
+if [ -z "$leftover" ] && command -v ydotool >/dev/null && [ -S "$socket" ]; then
+    printf '%s' "$text" |
+        YDOTOOL_SOCKET="$socket" ydotool type \
+            --key-delay "$delay" --key-hold "$delay" --file - && exit 0
+fi
+
+# Falling through with plain ASCII means ydotoold is gone, not that wtype is
+# the right tool. Say so: wtype cannot press Shift, so below it types the wrong
+# keys into clients that resolve keycodes through the seat layout (XWayland)
+# and silently lowercases clients that re-apply an empty modifier state
+# (SDL/FreeRDP) -- a failure that is invisible unless the daemon is watched.
+# Check with `systemctl --user status ydotool.service`.
+if [ -z "$leftover" ] &&
+    { ! command -v ydotool >/dev/null || [ ! -S "$socket" ]; } &&
+    command -v notify-send >/dev/null; then
+    notify-send --app-name=type-text "type-text" \
+        "ydotoold unavailable - wtype fallback can mistype (check ydotool.service)"
+fi
+
+if command -v wtype >/dev/null; then
+    wtype -- "$text" && exit 0
+fi
+
+printf '%s' "$text" | wl-copy
+command -v notify-send >/dev/null &&
+    notify-send --app-name=type-text "type-text" \
+        "No typing tool available; copied to clipboard instead."

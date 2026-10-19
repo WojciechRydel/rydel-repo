@@ -1,0 +1,49 @@
+#!/bin/bash
+
+STATS_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/pass-type/stats"
+mkdir -p "$(dirname "$STATS_FILE")"
+touch "$STATS_FILE"
+
+# Function to get count for an entry
+get_count() {
+  awk -F'|' -v entry="$1" '$1 == entry { print $2; exit }' "$STATS_FILE"
+}
+
+# Get all entries and sort by usage weight
+secret=$(find ~/.password-store -name '*.gpg' | \
+  awk -v root=$HOME/.password-store/ '{ sub(root, ""); sub(/\.gpg$/, ""); print }' | \
+  while read -r entry; do
+    count=$(get_count "$entry")
+    [ -z "$count" ] && count=0
+    printf '%s\t%s\n' "$count" "$entry"
+  done | \
+  sort -t$'\t' -k1 -nr | \
+  cut -f2 | \
+  bemenu --prompt 'Select password to type' \
+    --fn 'Ubuntu Mono 14' \
+    --list 10 \
+    --ignorecase)
+
+if [ -z "${secret}" ]; then
+  exit 0
+fi
+
+# Update usage stats
+current_count=$(get_count "$secret")
+if [ -n "$current_count" ]; then
+  # Increment existing count
+  awk -F'|' -v entry="$secret" -v OFS='|' \
+    '{ if ($1 == entry) $2 = $2 + 1; print }' "$STATS_FILE" > "${STATS_FILE}.tmp" \
+    && mv "${STATS_FILE}.tmp" "$STATS_FILE"
+else
+  # Add new entry with count 1
+  echo "${secret}|1" >> "$STATS_FILE"
+fi
+
+# Typing is delegated to type-text, which prefers ydotool over wtype and
+# explains why at length: wtype's synthetic keymap types the wrong keys into
+# XWayland clients and drops Shift for some others. It falls back to the
+# clipboard on its own if no typing tool is usable.
+password="$(pass "$secret")"
+printf '%s' "$password" | type-text
+unset password

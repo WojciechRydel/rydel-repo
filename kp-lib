@@ -1,0 +1,109 @@
+#!/bin/bash
+# Ansible-free shared helpers for the KeePassXC pickers. Sourced, not run.
+#
+# Why these exist: the vault cannot be fuzzy-searched from a TTY or a
+# launcher, which is why anything keyboard-driven historically ended up in
+# `pass` instead. Nothing here needs the Secret Service - as of 2026-09-08
+# that is oo7's job and the vault no longer serves the bus - so these talk to
+# keepassxc-cli directly.
+
+# The Syncthing folder root differs per host - ~/sync on hpc, ~/shared/sync
+# on t14 - so probe rather than hardcode. Same divergence that makes
+# .stignore a two-place edit and that put t14's task backup in the wrong
+# directory once already.
+if [ -n "${KEEPASSXC_DB:-}" ]; then
+    KP_DB="$KEEPASSXC_DB"
+else
+    for _c in "$HOME/sync/keepassxc/passwords.kdbx" \
+              "$HOME/shared/sync/keepassxc/passwords.kdbx"; do
+        [ -r "$_c" ] && { KP_DB="$_c"; break; }
+    done
+    KP_DB="${KP_DB:-$HOME/sync/keepassxc/passwords.kdbx}"
+    unset _c
+fi
+KP_CRED="${KEEPASSXC_TPM_CRED:-$HOME/.config/keepassxc/passwords.kdbx.tpm.cred}"
+KP_CACHE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kp-entries"
+# Resolved from this file's own location rather than $0, which is the *caller*
+# - a shell when the library is sourced interactively, in which case the
+# background refresh silently became a no-op.
+KP_REFRESHER="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/kp-type"
+KP_CACHE_TTL="${KP_CACHE_TTL:-900}"
+
+# Unsealed from the TPM, exactly as keepassxc-login-unlock and
+# keepassxc-merge-conflicts do. Never written to disk.
+kp_db_password() {
+    sudo -n /usr/bin/systemd-creds decrypt --newline=no "$KP_CRED" 2>/dev/null
+}
+
+# Listing costs one full KDF pass (AES-KDF, 1,000,000 rounds, ~1s), which is
+# far too slow to repeat per keystroke in a launcher. So the *paths* are
+# cached - they are metadata, not secrets, and the file is 0600 in
+# XDG_RUNTIME_DIR, which is tmpfs and cleared on logout. The password itself
+# is never cached and is fetched only for the entry actually chosen.
+kp_cache_fresh() {
+    [ -s "$KP_CACHE" ] || return 1
+    [ "$(( $(date +%s) - $(stat -c %Y "$KP_CACHE") ))" -lt "$KP_CACHE_TTL" ]
+}
+
+# Rebuild the cache. Serialised with flock so several launcher presses in a
+# row do not each pay the KDF; the losers simply exit.
+kp_cache_refresh() {
+    local lock="${KP_CACHE}.lock" tmp
+    exec 9>"$lock" || return 1
+    flock -n 9 || return 0
+    tmp="$(mktemp "${KP_CACHE}.XXXXXX")" || return 1
+    chmod 600 "$tmp"
+    if kp_db_password | keepassxc-cli ls -q -R -f "$KP_DB" 2>/dev/null \
+        | grep -vE '/$' | grep -vE '^Recycle Bin/' > "$tmp" && [ -s "$tmp" ]; then
+        mv "$tmp" "$KP_CACHE"      # atomic, so a concurrent reader is safe
+    else
+        rm -f "$tmp"
+        return 1
+    fi
+}
+
+# Stale-while-revalidate: whatever is cached is served immediately, and a
+# stale cache triggers a detached rebuild for next time. Listing costs a full
+# KDF pass (AES-KDF, 1,000,000 rounds, ~1.5s) and bemenu cannot render until
+# stdin closes, so paying that in the foreground is a visible freeze with no
+# feedback. Entry titles change rarely; serving slightly stale ones is a much
+# better trade than making every launch wait.
+kp_entries() {
+    if [ -s "$KP_CACHE" ]; then
+        cat "$KP_CACHE"
+        if ! kp_cache_fresh && [ -x "$KP_REFRESHER" ]; then
+            setsid -f "$KP_REFRESHER" --refresh-cache >/dev/null 2>&1 &
+        fi
+        return 0
+    fi
+    return 1        # nothing cached at all - caller shows a progress hint
+}
+
+kp_password_for() {
+    kp_db_password | keepassxc-cli show -q -a Password "$KP_DB" "$1" 2>/dev/null | tr -d '\n'
+}
+
+# Frecency, same shape and file format as pass-type's stats so the two
+# behave alike: most-used entries float to the top.
+kp_stats_file() {
+    local f="${XDG_DATA_HOME:-$HOME/.local/share}/kp-type/stats"
+    mkdir -p "$(dirname "$f")"; touch "$f"; printf '%s' "$f"
+}
+kp_count() { awk -F'|' -v e="$1" '$1 == e { print $2; exit }' "$2"; }
+kp_bump() {
+    local entry="$1" stats="$2" cur
+    cur="$(kp_count "$entry" "$stats")"
+    if [ -n "$cur" ]; then
+        awk -F'|' -v e="$entry" -v OFS='|' '{ if ($1 == e) $2 = $2 + 1; print }' \
+            "$stats" > "${stats}.tmp" && mv "${stats}.tmp" "$stats"
+    else
+        printf '%s|1\n' "$entry" >> "$stats"
+    fi
+}
+kp_rank() {
+    local stats="$1" c
+    while IFS= read -r e; do
+        c="$(kp_count "$e" "$stats")"; [ -z "$c" ] && c=0
+        printf '%s\t%s\n' "$c" "$e"
+    done | sort -t"$(printf '\t')" -k1 -nr | cut -f2
+}

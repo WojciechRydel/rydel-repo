@@ -1,0 +1,66 @@
+#!/bin/bash
+# Pick a KeePassXC entry with bemenu and type the password.
+# Companion to pass-type, for the vault rather than the pass store.
+set -uo pipefail
+# shellcheck source=/dev/null
+. "$(dirname "$(readlink -f "$0")")/kp-lib"
+
+# Called by kp-lib's detached background refresh.
+if [ "${1:-}" = "--refresh-cache" ]; then
+    kp_cache_refresh
+    exit $?
+fi
+
+STATS="$(kp_stats_file)"
+
+# A notification is the only feedback available for the cold path: bemenu
+# renders nothing until its stdin closes, and it has no async/streaming mode,
+# so a "Loading..." row inside the menu is not possible.
+notify_open() {
+    command -v notify-send >/dev/null || return 0
+    notify-send --print-id --app-name=kp-type -t 10000 \
+        "Unlocking vault" "Reading entries (first run this session)" 2>/dev/null
+}
+notify_close() {
+    [ -n "${1:-}" ] || return 0
+    command -v gdbus >/dev/null || return 0
+    gdbus call --session --dest org.freedesktop.Notifications \
+        --object-path /org/freedesktop/Notifications \
+        --method org.freedesktop.Notifications.CloseNotification "$1" >/dev/null 2>&1
+}
+
+entries="$(kp_entries)"
+if [ -z "$entries" ]; then
+    # Nothing cached: pay the KDF in the foreground, but say so first.
+    nid="$(notify_open)"
+    kp_cache_refresh
+    entries="$(cat "$KP_CACHE" 2>/dev/null)"
+    notify_close "$nid"
+    if [ -z "$entries" ]; then
+        command -v notify-send >/dev/null && notify-send -u critical --app-name=kp-type \
+            "kp-type" "Could not read the vault. Is the TPM credential intact?"
+        exit 1
+    fi
+fi
+
+entry="$(printf '%s\n' "$entries" | kp_rank "$STATS" | bemenu \
+    --prompt 'KeePassXC entry to type' \
+    --fn 'Ubuntu Mono 14' \
+    --list 10 \
+    --ignorecase)" || exit 0
+[ -z "$entry" ] && exit 0
+
+secret="$(kp_password_for "$entry")"
+if [ -z "$secret" ]; then
+    command -v notify-send >/dev/null && \
+        notify-send -u critical --app-name=kp-type "kp-type" "No password on: $entry"
+    exit 1
+fi
+
+kp_bump "$entry" "$STATS"
+
+# Typing is delegated to type-text, which prefers ydotool over wtype and
+# explains why at length: wtype's synthetic keymap types the wrong keys into
+# XWayland clients and drops Shift for some others. It falls back to the
+# clipboard on its own if no typing tool is usable.
+printf '%s' "$secret" | type-text

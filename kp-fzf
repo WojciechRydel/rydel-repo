@@ -1,0 +1,44 @@
+#!/bin/bash
+# Pick a KeePassXC entry with fzf from a TTY and copy the password.
+# Typing is meaningless in a terminal, so this copies, then clears.
+set -uo pipefail
+# shellcheck source=/dev/null
+. "$(dirname "$(readlink -f "$0")")/kp-lib"
+
+CLEAR_AFTER="${KP_CLEAR_AFTER:-45}"
+STATS="$(kp_stats_file)"
+
+if [ "${1:-}" = "--refresh-cache" ]; then kp_cache_refresh; exit $?; fi
+
+entries="$(kp_entries)"
+if [ -z "$entries" ]; then
+    printf 'unlocking vault (first run this session)...' >&2
+    kp_cache_refresh
+    entries="$(cat "$KP_CACHE" 2>/dev/null)"
+    printf '\r\033[K' >&2
+    [ -z "$entries" ] && { echo "kp-fzf: could not read the vault" >&2; exit 1; }
+fi
+
+entry="$(printf '%s\n' "$entries" | kp_rank "$STATS" \
+    | fzf --prompt='keepassxc> ' --height=40% --reverse --no-multi \
+          --header='enter copies the password')" || exit 0
+[ -z "$entry" ] && exit 0
+
+secret="$(kp_password_for "$entry")"
+[ -z "$secret" ] && { echo "kp-fzf: no password on: $entry" >&2; exit 1; }
+
+kp_bump "$entry" "$STATS"
+
+if command -v wl-copy >/dev/null; then
+    # --trim-newline is not enough on its own; the value is already stripped.
+    printf '%s' "$secret" | wl-copy
+    # Clear only if the clipboard still holds this secret, so a later copy is
+    # not silently wiped out from under the user.
+    ( sleep "$CLEAR_AFTER"
+      if [ "$(wl-paste --no-newline 2>/dev/null)" = "$secret" ]; then
+          wl-copy --clear 2>/dev/null
+      fi ) >/dev/null 2>&1 &
+    printf 'copied: %s (clipboard clears in %ss)\n' "$entry" "$CLEAR_AFTER"
+else
+    printf '%s\n' "$secret"
+fi
